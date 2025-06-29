@@ -6,12 +6,16 @@ Ignore: Emails you can safely skip
 Notify: Important information that doesn't need a response
 
 """
-
+import datetime
 from typing import Literal, Dict, Any, Tuple
-from user_profile import profile, prompt_instructions, sample_email
-from genai_client import generate_content
 
-from prompts import (
+# from user_profile import profile, prompt_instructions, sample_email
+from genai_client import generate_content
+from memory_manager import EmailMemoryManager, EmailRecord
+
+from config import (
+    profile,
+    prompt_instructions,
     triage_system_prompt, 
     triage_user_prompt, 
     response_format_instruction, 
@@ -28,26 +32,30 @@ class Router:
         self.reasoning = reasoning
         self.classification = classification
 
-def classify_email(email_data: Dict[str, str]) -> Router:
+def classify_email(email_data: Dict[str, str], memory: EmailMemoryManager) -> Router:
     """
     Classify an email using the Gemini model
     
     Args:
         email_data: Dictionary containing email details
                    (from, to, subject, body)
+        memory: The memory manager in charge of data storage and retrieval
     
     Returns:
         Router object with classification and reasoning
     """
+    # Get author history for context
+    author_history = memory.format_author_history_for_prompt(email_data['sender'])
+
     # Format the system prompt with profile and rules
     system_prompt = triage_system_prompt.format(
         full_name=profile["full_name"],
         name=profile["name"],
         user_profile_background=profile["user_profile_background"],
-        triage_no=prompt_instructions["triage_rules"]["ignore"],
+        triage_ignore=prompt_instructions["triage_rules"]["ignore"],
         triage_notify=prompt_instructions["triage_rules"]["notify"],
-        triage_email=prompt_instructions["triage_rules"]["respond"],
-        examples=""  # No examples for now
+        triage_respond=prompt_instructions["triage_rules"]["respond"],
+        examples=f"Previous interactions with this sender:\n{author_history}" 
     )
     
     # Format the user prompt with email details
@@ -118,20 +126,34 @@ def extract_classification(result_text: str) -> Tuple[Literal["ignore", "respond
 
 
 
-def triage_router(email_data: Dict[str, str]) -> Dict[str, Any]:
+def triage_router(email_data: Dict[str, str], memory: EmailMemoryManager) -> Dict[str, Any]:
     """
     Analyze an email and determine the next action
     
     Args:
         email_data: Dictionary with email details
+        memory: The email memory manger in charge of data storage and retrival
         
     Returns:
         Dictionary with action information
     """
     
     # Classify the email
-    result = classify_email(email_data)
+    result = classify_email(email_data, memory)
     
+    # Store the decision in memory
+    email_record = EmailRecord(
+        email_id=email_data["id"],
+        author=email_data["sender"],
+        subject=email_data["subject"],
+        classification=result.classification,
+        reasoning=result.reasoning,
+        thread_summary="", # TODO: Add summarization logic
+        timestamp=datetime.datetime.now(),
+        raw_content=email_data["body"]
+    )
+    memory.store_email_decision(email_record)
+
     # Take appropriate action based on classification
     if result.classification == "ignore":
         print(f"Classification: IGNORE - This email can be safely ignored")
