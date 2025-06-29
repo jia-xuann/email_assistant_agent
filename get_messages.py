@@ -77,6 +77,8 @@ def get_unread_message_ids(max_results=10):
 def decode_raw_message(raw_data):
     # Gmail's raw format is base64url encoded
     # Add padding if needed
+    if not raw_data:
+        return ""
     padded_data = raw_data + '=' * (4 - len(raw_data) % 4) if len(raw_data) % 4 else raw_data
     
     # Use base64.urlsafe_b64decode for proper decoding
@@ -86,6 +88,20 @@ def decode_raw_message(raw_data):
     msg = message_bytes.decode('utf-8', errors='replace')
   
     return msg
+
+def find_parts(parts):
+    body = ""
+    if parts:
+        for part in parts:
+            if part.get("mimeType") == "text/plain":
+                body += decode_raw_message(part.get("body", {}).get("data"))
+            elif part.get("mimeType") == "text/html":
+                # Fallback to HTML if plain text is not available
+                if not body:
+                    body += decode_raw_message(part.get("body", {}).get("data"))
+            elif "parts" in part:
+                body += find_parts(part["parts"])
+    return body
   
 def get_email_details(message_id : str):
     """
@@ -111,7 +127,11 @@ def get_email_details(message_id : str):
         recipient = header_dict.get('To', 'Unknown Recipient')
         
         # Extract message body 
-        body = decode_raw_message(message_data['payload']['parts'][0]['body']['data'])
+        body = ""
+        if "parts" in message_data["payload"]:
+            body = find_parts(message_data["payload"]["parts"])
+        else:
+            body = decode_raw_message(message_data["payload"].get("body", {}).get("data"))
 
         
         return {
@@ -159,7 +179,12 @@ def get_unread_emails(max_results=10):
         email_details['id'] = msg_id
         
         # Add to our list of unread emails
-        unread_emails.append(email_details)
+        if email_details["success"]:
+            unread_emails.append(email_details)
+        else:
+            print(f"Failed to process email with ID: {msg_id}")
+            print(f"Error: {email_details.get('error')}")
+
         
     print(f"Fetched details for {len(unread_emails)} unread emails.")
     return unread_emails
@@ -172,4 +197,3 @@ if __name__ == "__main__":
   if len(unread_emails)>0:
     for key, value in unread_emails[0].items():
         print(f'{key}:{value}')
-  
